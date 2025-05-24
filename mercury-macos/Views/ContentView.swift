@@ -6,6 +6,14 @@
 //
 
 import SwiftUI
+// AppKit is Apple's native UI framework for macOS development
+// It provides desktop-specific components like menu bars, window controls, 
+// status bar items and system dialogs that aren't available in SwiftUI alone
+import AppKit
+
+struct HumanEntry: Identifiable {
+    
+}
 
 struct ContentView: View {
     var body: some View {
@@ -13,7 +21,7 @@ struct ContentView: View {
             Image(systemName: "globe")
                 .imageScale(.large)
                 .foregroundStyle(.tint)
-            Text("Hello, world!")
+            Text("Hello, bitches!")
         }
         .padding()
     }

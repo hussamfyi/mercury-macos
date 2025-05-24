@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		55F818DF2DAB0F810005037C /* Mercury.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mercury.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		55F818DF2DAB0F810005037C /* mercury-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "mercury-macos.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		55F818E12DAB0F810005037C /* Mercury */ = {
+		55F818E12DAB0F810005037C /* mercury-macos */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Mercury;
+			path = "mercury-macos";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		55F818D62DAB0F810005037C = {
 			isa = PBXGroup;
 			children = (
-				55F818E12DAB0F810005037C /* Mercury */,
+				55F818E12DAB0F810005037C /* mercury-macos */,
 				55F818E02DAB0F810005037C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		55F818E02DAB0F810005037C /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				55F818DF2DAB0F810005037C /* Mercury.app */,
+				55F818DF2DAB0F810005037C /* mercury-macos.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		55F818DE2DAB0F810005037C /* Mercury */ = {
+		55F818DE2DAB0F810005037C /* mercury-macos */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 55F818EE2DAB0F820005037C /* Build configuration list for PBXNativeTarget "Mercury" */;
+			buildConfigurationList = 55F818EE2DAB0F820005037C /* Build configuration list for PBXNativeTarget "mercury-macos" */;
 			buildPhases = (
 				55F818DB2DAB0F810005037C /* Sources */,
 				55F818DC2DAB0F810005037C /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				55F818E12DAB0F810005037C /* Mercury */,
+				55F818E12DAB0F810005037C /* mercury-macos */,
 			);
-			name = Mercury;
+			name = "mercury-macos";
 			packageProductDependencies = (
 			);
 			productName = Mercury;
-			productReference = 55F818DF2DAB0F810005037C /* Mercury.app */;
+			productReference = 55F818DF2DAB0F810005037C /* mercury-macos.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 55F818DA2DAB0F810005037C /* Build configuration list for PBXProject "Mercury" */;
+			buildConfigurationList = 55F818DA2DAB0F810005037C /* Build configuration list for PBXProject "mercury-macos" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				55F818DE2DAB0F810005037C /* Mercury */,
+				55F818DE2DAB0F810005037C /* mercury-macos */,
 			);
 		};
 /* End PBXProject section */
@@ -296,7 +296,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		55F818DA2DAB0F810005037C /* Build configuration list for PBXProject "Mercury" */ = {
+		55F818DA2DAB0F810005037C /* Build configuration list for PBXProject "mercury-macos" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				55F818EC2DAB0F820005037C /* Debug */,
@@ -305,7 +305,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		55F818EE2DAB0F820005037C /* Build configuration list for PBXNativeTarget "Mercury" */ = {
+		55F818EE2DAB0F820005037C /* Build configuration list for PBXNativeTarget "mercury-macos" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				55F818EF2DAB0F820005037C /* Debug */,

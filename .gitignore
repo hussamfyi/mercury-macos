@@ -1,0 +1,49 @@
+# Build and cache artifacts
+build/
+DerivedData/
+
+# Xcode user-specific files
+*.xcuserdata
+*.xcuserstate
+
+# Workspace and schemes (optional – keep if you're sharing them)
+*.xcworkspace
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+
+# macOS system files
+.DS_Store
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+
+# CocoaPods (if you ever use it)
+Pods/
+
+# Carthage (if used)
+Carthage/
+
+# Fastlane (if used)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+# Archives
+*.xcarchive
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# IDE preferences
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Environment files
+.env
