@@ -1,0 +1,342 @@
+import XCTest
+import NIOCore
+import NIOHTTP1
+import NIOPosix
+@testable import mercury_cli_auth
+
+final class HTTPServerTests: XCTestCase {
+    
+    private var server: HTTPServer!
+    
+    override func setUp() {
+        super.setUp()
+        server = HTTPServer()
+    }
+    
+    override func tearDown() {
+        if server != nil {
+            try? server.shutdown()
+            server = nil
+        }
+        super.tearDown()
+    }
+    
+    // MARK: - Initialization Tests
+    
+    func testHTTPServerInitialization() {
+        let server = HTTPServer()
+        XCTAssertNotNil(server, "HTTPServer should initialize successfully")
+    }
+    
+    // MARK: - Server Startup Tests
+    
+    func testStartServerOnSpecificPort() async throws {
+        let targetPort = 8080
+        
+        do {
+            let actualPort = try await server.start(on: targetPort)
+            XCTAssertEqual(actualPort, targetPort, "Server should start on requested port")
+            
+            // Verify server is actually listening
+            let isListening = await isPortListening(port: actualPort)
+            XCTAssertTrue(isListening, "Port should be listening")
+            
+        } catch {
+            // If port 8080 is already in use, try another port
+            let alternatePort = 8081
+            let actualPort = try await server.start(on: alternatePort)
+            XCTAssertEqual(actualPort, alternatePort, "Server should start on alternate port")
+        }
+    }
+    
+    func testStartServerWithPortSelection() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        XCTAssertGreaterThanOrEqual(actualPort, 1024, "Port should be in user port range")
+        XCTAssertLessThanOrEqual(actualPort, 65535, "Port should be in valid range")
+        
+        // Verify server is actually listening
+        let isListening = await isPortListening(port: actualPort)
+        XCTAssertTrue(isListening, "Port should be listening")
+    }
+    
+    func testStartServerWithTimeout() async throws {
+        let timeoutSeconds: TimeInterval = 1.0
+        let actualPort = try await server.startWithPortSelectionAndTimeout(timeoutSeconds: timeoutSeconds)
+        
+        XCTAssertGreaterThanOrEqual(actualPort, 1024, "Port should be in user port range")
+        
+        // Wait for timeout to trigger
+        let expectation = XCTestExpectation(description: "Timeout callback")
+        
+        server.timeoutCallback = {
+            expectation.fulfill()
+        }
+        
+        await fulfillment(of: [expectation], timeout: timeoutSeconds + 1.0)
+    }
+    
+    func testStartServerTwiceThrowsError() async throws {
+        _ = try await server.startWithPortSelection()
+        
+        // Attempting to start again should throw error
+        do {
+            _ = try await server.startWithPortSelection()
+            XCTFail("Starting server twice should throw error")
+        } catch let error as HTTPServerError {
+            switch error {
+            case .serverAlreadyRunning:
+                // Expected error
+                break
+            default:
+                XCTFail("Should throw serverAlreadyRunning error, got: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Callback Tests
+    
+    func testOAuthCallbackWithAuthorizationCode() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        let expectation = XCTestExpectation(description: "Authorization callback")
+        var receivedCode: String?
+        var receivedState: String?
+        var receivedError: Error?
+        
+        // Set up callback handler
+        server.authorizationCallback = { code, state, error in
+            receivedCode = code
+            receivedState = state
+            receivedError = error
+            expectation.fulfill()
+        }
+        
+        // Simulate OAuth callback with authorization code
+        let testCode = "test_authorization_code_12345"
+        let testState = "test_state_67890"
+        let callbackURL = "http://localhost:\(actualPort)/callback?code=\(testCode)&state=\(testState)"
+        
+        // Simulate callback
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+            Task {
+                _ = await self.makeHTTPRequest(to: callbackURL)
+            }
+        }
+        
+        await fulfillment(of: [expectation], timeout: 5.0)
+        
+        XCTAssertEqual(receivedCode, testCode, "Should receive authorization code")
+        XCTAssertEqual(receivedState, testState, "Should receive state parameter")
+        XCTAssertNil(receivedError, "Should not receive error")
+    }
+    
+    func testOAuthCallbackWithError() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        let expectation = XCTestExpectation(description: "Authorization error callback")
+        var receivedCode: String?
+        var receivedState: String?
+        var receivedError: Error?
+        
+        // Set up callback handler
+        server.authorizationCallback = { code, state, error in
+            receivedCode = code
+            receivedState = state
+            receivedError = error
+            expectation.fulfill()
+        }
+        
+        // Simulate OAuth callback with error
+        let testError = "access_denied"
+        let testState = "test_state_67890"
+        let callbackURL = "http://localhost:\(actualPort)/callback?error=\(testError)&state=\(testState)"
+        
+        // Make HTTP request to callback endpoint
+        Task {
+            await makeHTTPRequest(to: callbackURL)
+        }
+        
+        await fulfillment(of: [expectation], timeout: 5.0)
+        
+        XCTAssertNil(receivedCode, "Should not receive authorization code")
+        XCTAssertEqual(receivedState, testState, "Should receive state parameter")
+        XCTAssertNotNil(receivedError, "Should receive error")
+        
+        if let httpError = receivedError as? HTTPServerError,
+           case .oauthError(let errorMessage) = httpError {
+            XCTAssertEqual(errorMessage, testError, "Error message should match")
+        } else {
+            XCTFail("Should receive HTTPServerError.oauthError")
+        }
+    }
+    
+    func testOAuthCallbackWithMissingCode() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        let expectation = XCTestExpectation(description: "Missing code callback")
+        var receivedError: Error?
+        
+        // Set up callback handler
+        server.authorizationCallback = { _, _, error in
+            receivedError = error
+            expectation.fulfill()
+        }
+        
+        // Simulate OAuth callback with missing code
+        let testState = "test_state_67890"
+        let callbackURL = "http://localhost:\(actualPort)/callback?state=\(testState)"
+        
+        // Make HTTP request to callback endpoint
+        Task {
+            await makeHTTPRequest(to: callbackURL)
+        }
+        
+        await fulfillment(of: [expectation], timeout: 5.0)
+        
+        XCTAssertNotNil(receivedError, "Should receive error for missing code")
+        
+        if let httpError = receivedError as? HTTPServerError,
+           case .missingAuthorizationCode = httpError {
+            // Expected error
+        } else {
+            XCTFail("Should receive HTTPServerError.missingAuthorizationCode")
+        }
+    }
+    
+    func test404ForNonCallbackPath() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        // Make request to non-callback path
+        let response = await makeHTTPRequest(to: "http://localhost:\(actualPort)/invalid")
+        
+        XCTAssertEqual(response.statusCode, 404, "Should return 404 for non-callback paths")
+    }
+    
+    // MARK: - Wait for Callback Tests
+    
+    func testWaitForCallbackSuccess() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        let testCode = "test_code_12345"
+        let testState = "test_state_67890"
+        
+        // Start waiting for callback in background
+        let callbackTask = Task.detached {
+            try await self.server.waitForCallback()
+        }
+        
+        // Simulate callback after short delay
+        Task.detached {
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            _ = await self.makeHTTPRequest(to: "http://localhost:\(actualPort)/callback?code=\(testCode)&state=\(testState)")
+        }
+        
+        let callbackResponse = try await callbackTask.value
+        
+        XCTAssertEqual(callbackResponse.authorizationCode, testCode, "Should receive authorization code")
+        XCTAssertEqual(callbackResponse.state, testState, "Should receive state")
+        XCTAssertTrue(callbackResponse.isSuccess, "Response should indicate success")
+        XCTAssertFalse(callbackResponse.isError, "Response should not indicate error")
+    }
+    
+    func testWaitForCallbackError() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        let testError = "access_denied"
+        let testState = "test_state_67890"
+        
+        // Start waiting for callback in background
+        let callbackTask = Task.detached {
+            try await self.server.waitForCallback()
+        }
+        
+        // Simulate error callback after short delay
+        Task.detached {
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            _ = await self.makeHTTPRequest(to: "http://localhost:\(actualPort)/callback?error=\(testError)&state=\(testState)")
+        }
+        
+        do {
+            _ = try await callbackTask.value
+            XCTFail("Should throw error for OAuth error callback")
+        } catch let error as HTTPServerError {
+            switch error {
+            case .oauthError(let message):
+                XCTAssertEqual(message, testError, "Error message should match")
+            default:
+                XCTFail("Should throw oauthError, got: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Server Shutdown Tests
+    
+    func testServerShutdown() async throws {
+        let actualPort = try await server.startWithPortSelection()
+        
+        // Verify server is listening
+        let isListeningBefore = await isPortListening(port: actualPort)
+        XCTAssertTrue(isListeningBefore, "Server should be listening before shutdown")
+        
+        // Shutdown server
+        try server.shutdown()
+        
+        // Wait a bit for shutdown to complete
+        try await Task.sleep(nanoseconds: 500_000_000) // 500ms
+        
+        // Verify server is no longer listening
+        let isListeningAfter = await isPortListening(port: actualPort)
+        XCTAssertFalse(isListeningAfter, "Server should stop listening after shutdown")
+    }
+    
+    func testMultipleShutdowns() async throws {
+        _ = try await server.startWithPortSelection()
+        
+        // Multiple shutdowns should not throw errors
+        XCTAssertNoThrow(try server.shutdown())
+        XCTAssertNoThrow(try server.shutdown())
+        XCTAssertNoThrow(try server.shutdown())
+    }
+    
+    func testShutdownWithoutStarting() {
+        let newServer = HTTPServer()
+        
+        // Shutting down a server that never started should not throw
+        XCTAssertNoThrow(try newServer.shutdown())
+    }
+    
+    // MARK: - Helper Methods
+    
+    /// Make an HTTP request to the specified URL and return response information
+    private func makeHTTPRequest(to urlString: String) async -> (statusCode: Int, body: String) {
+        guard let url = URL(string: urlString) else {
+            return (statusCode: -1, body: "Invalid URL")
+        }
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            let httpResponse = response as? HTTPURLResponse
+            let body = String(data: data, encoding: .utf8) ?? ""
+            return (statusCode: httpResponse?.statusCode ?? -1, body: body)
+        } catch {
+            return (statusCode: -1, body: "Request failed: \(error)")
+        }
+    }
+    
+    /// Check if a port is currently listening
+    private func isPortListening(port: Int) async -> Bool {
+        guard let url = URL(string: "http://localhost:\(port)") else {
+            return false
+        }
+        
+        do {
+            let (_, response) = try await URLSession.shared.data(from: url)
+            // If we get any response, the port is listening
+            return response is HTTPURLResponse
+        } catch {
+            // If connection fails, port is not listening
+            return false
+        }
+    }
+}

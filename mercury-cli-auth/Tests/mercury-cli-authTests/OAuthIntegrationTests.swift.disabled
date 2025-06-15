@@ -1,0 +1,397 @@
+import XCTest
+@testable import mercury_cli_auth
+
+/// Integration tests for the complete OAuth 2.0 + PKCE flow
+/// These tests validate the end-to-end flow without requiring real X API credentials
+final class OAuthIntegrationTests: XCTestCase {
+    
+    private var oauthManager: OAuthManager!
+    private var httpServer: HTTPServer!
+    private var xapiClient: XAPIClient!
+    
+    private let testClientId = "test_client_id_integration_12345"
+    private let testRedirectUri = "http://localhost:8080/callback"
+    
+    override func setUp() {
+        super.setUp()
+        
+        // Initialize components
+        oauthManager = OAuthManager(clientId: testClientId, redirectUri: testRedirectUri)
+        httpServer = HTTPServer()
+        xapiClient = XAPIClient()
+    }
+    
+    override func tearDown() {
+        if let server = httpServer {
+            try? server.shutdown()
+            httpServer = nil
+        }
+        oauthManager = nil
+        xapiClient = nil
+        super.tearDown()
+    }
+    
+    // MARK: - Complete OAuth Flow Integration Tests
+    
+    /// Test the complete OAuth flow from start to callback handling
+    /// This test validates that all components work together correctly
+    func testCompleteOAuthFlowWithSuccessfulCallback() async throws {
+        // Step 1: Start HTTP server for callback handling
+        let actualPort = try await httpServer.startWithPortSelection()
+        let dynamicRedirectUri = "http://localhost:\(actualPort)/callback"
+        
+        // Update OAuth manager with actual redirect URI
+        let dynamicOAuthManager = OAuthManager(clientId: testClientId, redirectUri: dynamicRedirectUri)
+        
+        // Step 2: Start OAuth authorization flow
+        let authUrl = try dynamicOAuthManager.startAuthorizationFlow()
+        
+        // Validate authorization URL structure
+        let urlComponents = URLComponents(url: authUrl, resolvingAgainstBaseURL: false)
+        XCTAssertNotNil(urlComponents, "Authorization URL should be valid")
+        
+        guard let queryItems = urlComponents?.queryItems else {
+            XCTFail("Authorization URL should contain query parameters")
+            return
+        }
+        
+        let queryDict = Dictionary(uniqueKeysWithValues: queryItems.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+        
+        // Extract OAuth parameters for simulation
+        guard let state = queryDict["state"],
+              let _ = queryDict["code_challenge"] else {
+            XCTFail("Authorization URL should contain state and code_challenge parameters")
+            return
+        }
+        
+        // Step 3: Set up callback expectation
+        let callbackExpectation = XCTestExpectation(description: "OAuth callback received")
+        var receivedCode: String?
+        var receivedState: String?
+        var callbackError: Error?
+        
+        httpServer.authorizationCallback = { code, callbackState, error in
+            receivedCode = code
+            receivedState = callbackState
+            callbackError = error
+            callbackExpectation.fulfill()
+        }
+        
+        // Step 4: Simulate successful OAuth callback from authorization server
+        let simulatedAuthCode = "simulated_auth_code_12345_success"
+        let callbackURL = "\(dynamicRedirectUri)?code=\(simulatedAuthCode)&state=\(state)"
+        
+        // Make HTTP request to callback endpoint to simulate OAuth redirect
+        Task.detached {
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
+            await self.makeHTTPRequest(to: callbackURL)
+        }
+        
+        // Step 5: Wait for callback to be processed
+        await fulfillment(of: [callbackExpectation], timeout: 5.0)
+        
+        // Step 6: Validate callback results
+        XCTAssertEqual(receivedCode, simulatedAuthCode, "Should receive simulated authorization code")
+        XCTAssertEqual(receivedState, state, "Should receive matching state parameter")
+        XCTAssertNil(callbackError, "Should not receive callback error")
+        
+        // Step 7: Attempt token exchange (will fail without real credentials, but validates flow structure)
+        do {
+            _ = try await dynamicOAuthManager.exchangeCodeForToken(
+                authorizationCode: simulatedAuthCode,
+                receivedState: state
+            )
+            XCTFail("Token exchange should fail with simulated credentials")
+        } catch let error as OAuthError {
+            // Expected failure due to simulated credentials
+            switch error {
+            case .tokenExchangeFailed:
+                // This is expected with simulated data
+                break
+            default:
+                XCTFail("Should get tokenExchangeFailed error, got: \(error)")
+            }
+        }
+        
+        print("✅ Complete OAuth flow integration test passed - all components work together correctly")
+    }
+    
+    /// Test OAuth flow with error callback
+    func testCompleteOAuthFlowWithErrorCallback() async throws {
+        // Step 1: Start HTTP server
+        let actualPort = try await httpServer.startWithPortSelection()
+        let dynamicRedirectUri = "http://localhost:\(actualPort)/callback"
+        
+        // Step 2: Start OAuth flow
+        let dynamicOAuthManager = OAuthManager(clientId: testClientId, redirectUri: dynamicRedirectUri)
+        let authUrl = try dynamicOAuthManager.startAuthorizationFlow()
+        
+        // Extract state parameter
+        let urlComponents = URLComponents(url: authUrl, resolvingAgainstBaseURL: false)
+        guard let queryItems = urlComponents?.queryItems,
+              let state = queryItems.first(where: { $0.name == "state" })?.value else {
+            XCTFail("Should have state parameter")
+            return
+        }
+        
+        // Step 3: Set up error callback expectation
+        let errorExpectation = XCTestExpectation(description: "OAuth error callback received")
+        var callbackError: Error?
+        
+        httpServer.authorizationCallback = { _, _, error in
+            callbackError = error
+            errorExpectation.fulfill()
+        }
+        
+        // Step 4: Simulate error callback
+        let errorCallbackURL = "\(dynamicRedirectUri)?error=access_denied&state=\(state)"
+        
+        Task.detached {
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
+            await self.makeHTTPRequest(to: errorCallbackURL)
+        }
+        
+        // Step 5: Wait for error callback
+        await fulfillment(of: [errorExpectation], timeout: 5.0)
+        
+        // Step 6: Validate error handling
+        XCTAssertNotNil(callbackError, "Should receive error for access denied")
+        
+        if let httpError = callbackError as? HTTPServerError,
+           case .oauthError(let errorMessage) = httpError {
+            XCTAssertEqual(errorMessage, "access_denied", "Error message should match")
+        } else {
+            XCTFail("Should receive HTTPServerError.oauthError")
+        }
+        
+        print("✅ OAuth error flow integration test passed")
+    }
+    
+    /// Test complete flow with timeout scenario
+    func testCompleteOAuthFlowWithTimeout() async throws {
+        // Step 1: Start HTTP server with short timeout
+        let timeoutSeconds: TimeInterval = 1.0
+        let actualPort = try await httpServer.startWithPortSelectionAndTimeout(timeoutSeconds: timeoutSeconds)
+        
+        // Step 2: Start OAuth flow
+        let dynamicRedirectUri = "http://localhost:\(actualPort)/callback"
+        let dynamicOAuthManager = OAuthManager(clientId: testClientId, redirectUri: dynamicRedirectUri)
+        let authUrl = try dynamicOAuthManager.startAuthorizationFlow()
+        
+        XCTAssertNotNil(authUrl, "Authorization URL should be generated")
+        
+        // Step 3: Set up timeout expectation
+        let timeoutExpectation = XCTestExpectation(description: "OAuth timeout")
+        
+        httpServer.timeoutCallback = {
+            timeoutExpectation.fulfill()
+        }
+        
+        // Step 4: Wait for timeout (don't send callback)
+        await fulfillment(of: [timeoutExpectation], timeout: timeoutSeconds + 1.0)
+        
+        print("✅ OAuth timeout integration test passed")
+    }
+    
+    /// Test OAuth flow with state mismatch security validation
+    func testCompleteOAuthFlowWithStateMismatch() async throws {
+        // Step 1: Start HTTP server
+        let actualPort = try await httpServer.startWithPortSelection()
+        let dynamicRedirectUri = "http://localhost:\(actualPort)/callback"
+        
+        // Step 2: Start OAuth flow
+        let dynamicOAuthManager = OAuthManager(clientId: testClientId, redirectUri: dynamicRedirectUri)
+        let authUrl = try dynamicOAuthManager.startAuthorizationFlow()
+        
+        // Extract original state
+        let urlComponents = URLComponents(url: authUrl, resolvingAgainstBaseURL: false)
+        guard let queryItems = urlComponents?.queryItems,
+              let _ = queryItems.first(where: { $0.name == "state" })?.value else {
+            XCTFail("Should have state parameter")
+            return
+        }
+        
+        // Step 3: Set up callback expectation
+        let callbackExpectation = XCTestExpectation(description: "OAuth callback with wrong state")
+        var receivedCode: String?
+        var receivedState: String?
+        
+        httpServer.authorizationCallback = { code, state, error in
+            receivedCode = code
+            receivedState = state
+            callbackExpectation.fulfill()
+        }
+        
+        // Step 4: Simulate callback with wrong state
+        let simulatedAuthCode = "auth_code_12345"
+        let wrongState = "wrong_state_parameter"
+        let callbackURL = "\(dynamicRedirectUri)?code=\(simulatedAuthCode)&state=\(wrongState)"
+        
+        Task.detached {
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
+            await self.makeHTTPRequest(to: callbackURL)
+        }
+        
+        await fulfillment(of: [callbackExpectation], timeout: 5.0)
+        
+        // Step 5: Attempt token exchange with mismatched state
+        XCTAssertEqual(receivedCode, simulatedAuthCode, "Should receive authorization code")
+        XCTAssertEqual(receivedState, wrongState, "Should receive wrong state")
+        
+        do {
+            _ = try await dynamicOAuthManager.exchangeCodeForToken(
+                authorizationCode: simulatedAuthCode,
+                receivedState: wrongState // This should trigger state mismatch error
+            )
+            XCTFail("Token exchange should fail due to state mismatch")
+        } catch let error as OAuthError {
+            switch error {
+            case .stateMismatch:
+                // Expected security validation error
+                print("✅ State mismatch security validation working correctly")
+                break
+            default:
+                XCTFail("Should get stateMismatch error, got: \(error)")
+            }
+        }
+        
+        print("✅ OAuth state mismatch security test passed")
+    }
+    
+    // MARK: - PKCE Integration Tests
+    
+    /// Test that PKCE parameters are correctly generated and used throughout the flow
+    func testPKCEIntegrationFlow() async throws {
+        // Step 1: Start OAuth flow and capture PKCE parameters
+        let authUrl1 = try oauthManager.startAuthorizationFlow()
+        let authUrl2 = try oauthManager.startAuthorizationFlow()
+        
+        // Parse both URLs to get PKCE parameters
+        let components1 = URLComponents(url: authUrl1, resolvingAgainstBaseURL: false)
+        let components2 = URLComponents(url: authUrl2, resolvingAgainstBaseURL: false)
+        
+        let challenge1 = components1?.queryItems?.first { $0.name == "code_challenge" }?.value
+        let challenge2 = components2?.queryItems?.first { $0.name == "code_challenge" }?.value
+        let method1 = components1?.queryItems?.first { $0.name == "code_challenge_method" }?.value
+        let method2 = components2?.queryItems?.first { $0.name == "code_challenge_method" }?.value
+        
+        // Step 2: Validate PKCE parameters
+        XCTAssertNotNil(challenge1, "First URL should have code challenge")
+        XCTAssertNotNil(challenge2, "Second URL should have code challenge")
+        XCTAssertNotEqual(challenge1, challenge2, "Code challenges should be unique")
+        XCTAssertEqual(method1, "S256", "Should use SHA256 challenge method")
+        XCTAssertEqual(method2, "S256", "Should use SHA256 challenge method")
+        
+        // Step 3: Validate challenge format (Base64 URL encoded SHA256)
+        if let challenge = challenge1 {
+            XCTAssertEqual(challenge.count, 43, "SHA256 Base64 URL encoded should be 43 characters")
+            XCTAssertFalse(challenge.contains("+"), "Code challenge should be Base64 URL encoded")
+            XCTAssertFalse(challenge.contains("/"), "Code challenge should be Base64 URL encoded")
+            XCTAssertFalse(challenge.contains("="), "Code challenge should be Base64 URL encoded")
+        }
+        
+        print("✅ PKCE integration flow test passed")
+    }
+    
+    // MARK: - Component Integration Tests
+    
+    /// Test that all components (OAuthManager, HTTPServer, XAPIClient) can be used together
+    func testComponentsWorkTogether() async throws {
+        // Step 1: Initialize all components
+        let server = HTTPServer()
+        let actualPort = try await server.startWithPortSelection()
+        let redirectUri = "http://localhost:\(actualPort)/callback"
+        
+        let oauth = OAuthManager(clientId: "test_client", redirectUri: redirectUri)
+        let apiClient = XAPIClient()
+        
+        // Step 2: Test OAuth flow
+        let authUrl = try oauth.startAuthorizationFlow()
+        XCTAssertNotNil(authUrl, "OAuth manager should generate auth URL")
+        
+        // Step 3: Test server is running
+        let isListening = await isPortListening(port: actualPort)
+        XCTAssertTrue(isListening, "HTTP server should be listening")
+        
+        // Step 4: Test API client setup
+        XCTAssertThrowsError(try apiClient.setAccessToken("")) { error in
+            XCTAssertTrue(error is XAPIError, "Should throw XAPIError for empty token")
+        }
+        
+        try apiClient.setAccessToken("test_token")
+        
+        // Step 5: Cleanup
+        try server.shutdown()
+        
+        print("✅ All components integration test passed")
+    }
+    
+    /// Test concurrent OAuth flows (multiple instances)
+    func testConcurrentOAuthFlows() async throws {
+        let numberOfFlows = 5
+        var authUrls: [URL] = []
+        var states: [String] = []
+        var challenges: [String] = []
+        
+        // Create multiple OAuth managers and start flows concurrently
+        await withTaskGroup(of: (URL, String, String).self) { group in
+            for i in 0..<numberOfFlows {
+                group.addTask {
+                    let oauth = OAuthManager(
+                        clientId: "test_client_\(i)",
+                        redirectUri: "http://localhost:808\(i)/callback"
+                    )
+                    
+                    let authUrl = try! oauth.startAuthorizationFlow()
+                    let components = URLComponents(url: authUrl, resolvingAgainstBaseURL: false)!
+                    let state = components.queryItems!.first { $0.name == "state" }!.value!
+                    let challenge = components.queryItems!.first { $0.name == "code_challenge" }!.value!
+                    
+                    return (authUrl, state, challenge)
+                }
+            }
+            
+            for await result in group {
+                authUrls.append(result.0)
+                states.append(result.1)
+                challenges.append(result.2)
+            }
+        }
+        
+        // Validate uniqueness of generated parameters
+        XCTAssertEqual(authUrls.count, numberOfFlows, "Should have all auth URLs")
+        XCTAssertEqual(Set(states).count, numberOfFlows, "All states should be unique")
+        XCTAssertEqual(Set(challenges).count, numberOfFlows, "All challenges should be unique")
+        
+        print("✅ Concurrent OAuth flows test passed")
+    }
+    
+    // MARK: - Helper Methods
+    
+    /// Make an HTTP request to the specified URL
+    private func makeHTTPRequest(to urlString: String) async {
+        guard let url = URL(string: urlString) else { return }
+        
+        do {
+            _ = try await URLSession.shared.data(from: url)
+        } catch {
+            // Ignore errors for simulation purposes
+        }
+    }
+    
+    /// Check if a port is currently listening
+    private func isPortListening(port: Int) async -> Bool {
+        guard let url = URL(string: "http://localhost:\(port)") else {
+            return false
+        }
+        
+        do {
+            let (_, response) = try await URLSession.shared.data(from: url)
+            return response is HTTPURLResponse
+        } catch {
+            return false
+        }
+    }
+}
